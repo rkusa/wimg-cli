@@ -227,10 +227,7 @@ fn main() {
         };
 
         let relative_path = path.strip_prefix(&base).unwrap();
-        let name = relative_path
-            .with_extension("")
-            .to_string_lossy()
-            .to_string();
+        let name = relative_path.to_string_lossy().to_string();
         let out_file = args.out_dir.join(relative_path);
 
         for format in &args.format {
