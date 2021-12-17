@@ -244,7 +244,13 @@ fn main() {
             let hash = wimg::hash::hash(&data, seed);
             log::debug!("Hash: {}", hex::encode(hash.to_be_bytes()));
 
-            let out_file = out_file.with_extension(format.ext());
+            let file_stem = out_file
+                .file_stem()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            let out_file = out_file
+                .with_file_name(format!("{}-{}", file_stem, hash))
+                .with_extension(format.ext());
             log::debug!("Writing to {}", out_file.to_string_lossy());
 
             if let Some(parent) = out_file.parent() {
