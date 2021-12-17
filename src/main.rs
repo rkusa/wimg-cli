@@ -27,6 +27,9 @@ struct Args {
     #[clap(long, short)]
     height: u32,
 
+    #[clap(long, short = 'd', default_value = "1")]
+    pixel_density: Vec<u8>,
+
     /// Name of the variant.
     #[clap(long, short = 'n')]
     variant: Option<String>,
@@ -80,7 +83,16 @@ enum OutputFormat {
     Webp,
 }
 
-pub type Manifest = BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>;
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Variant {
+    width: u32,
+    height: u32,
+    pixel_density: u8,
+    formats: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+pub type Manifest = BTreeMap<String, BTreeMap<String, Variant>>;
 
 fn main() {
     let args = Args::parse();
@@ -217,83 +229,108 @@ fn main() {
             }
         };
 
-        log::debug!("Resizing {}", path_string);
-        let image = match wimg::resize::resize(&image, args.width, args.height, true) {
-            Ok(image) => image,
-            Err(err) => {
-                log::error!("failed to resize {}: {}", path_string, err);
-                process::exit(1);
-            }
-        };
-
-        let relative_path = path.strip_prefix(&base).unwrap();
-        let name = relative_path.to_string_lossy().to_string();
-        let out_file = args.out_dir.join(relative_path);
-
-        for format in &args.format {
-            let seed = wimg::resize::seed()
-                + match format {
-                    OutputFormat::Avif => wimg::avif::seed(),
-                    OutputFormat::Jpeg => wimg::jpeg::seed(),
-                    OutputFormat::Png => wimg::png::seed(),
-                    OutputFormat::Webp => wimg::webp::seed(),
-                };
-            let mut hash = wimg::hash::hash(&data, seed);
-            if let Some((_, variant)) = &manifest {
-                hash += wimg::hash::hash(variant.as_bytes(), seed);
-            }
-            let hash = hex::encode(hash.to_be_bytes());
-
-            let file_stem = out_file
-                .file_stem()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default();
-            let out_file = out_file
-                .with_file_name(format!("{}-{}", file_stem, hash))
-                .with_extension(format.ext());
-            log::debug!("Writing to {}", out_file.to_string_lossy());
-
-            if let Some(parent) = out_file.parent() {
-                if let Err(err) = fs::create_dir_all(&parent) {
-                    log::error!(
-                        "failed to create directory {}: {}",
-                        parent.to_string_lossy(),
-                        err
-                    );
-                    process::exit(1);
-                }
+        for pd in &args.pixel_density {
+            let pd = *pd;
+            if pd == 0 {
+                continue;
             }
 
-            let result = match format {
-                OutputFormat::Avif => wimg::avif::encode(&image, &(&args.avif).into()),
-                OutputFormat::Jpeg => wimg::jpeg::encode(&image, &(&args.jpeg).into()),
-                OutputFormat::Png => wimg::png::encode(&image),
-                OutputFormat::Webp => wimg::webp::encode(&image, &(&args.webp).into()),
-            };
-            let image = match result {
+            log::debug!("Resizing {} (PD: {})", path_string, pd);
+            let image = match wimg::resize::resize(
+                &image,
+                args.width * pd as u32,
+                args.height * pd as u32,
+                true,
+            ) {
                 Ok(image) => image,
                 Err(err) => {
-                    log::error!("failed to encode {} as {}: {}", path_string, format, err);
+                    log::error!("failed to resize {}: {}", path_string, err);
                     process::exit(1);
                 }
             };
 
-            if let Err(err) = fs::write(&out_file, &image) {
-                log::error!("failed to write {}: {}", out_file.to_string_lossy(), err);
-                process::exit(1);
-            }
+            let relative_path = path.strip_prefix(&base).unwrap();
+            let name = relative_path.to_string_lossy().to_string();
+            let out_file = args.out_dir.join(relative_path);
 
-            if let Some((manifest, variant)) = &mut manifest {
-                let variants = manifest.entry(name.to_string()).or_default();
-                let formats = variants.entry(variant.clone()).or_default();
-                formats.insert(
-                    format.ext().to_string(),
-                    out_file
-                        .strip_prefix(&args.out_dir)
-                        .unwrap()
-                        .to_string_lossy()
-                        .to_string(),
-                );
+            for format in &args.format {
+                let seed = wimg::resize::seed()
+                    + match format {
+                        OutputFormat::Avif => wimg::avif::seed(),
+                        OutputFormat::Jpeg => wimg::jpeg::seed(),
+                        OutputFormat::Png => wimg::png::seed(),
+                        OutputFormat::Webp => wimg::webp::seed(),
+                    };
+                let mut hash = wimg::hash::hash(&data, seed);
+                if let Some((_, variant)) = &manifest {
+                    hash += wimg::hash::hash(variant.as_bytes(), seed);
+                }
+                let hash = hex::encode(hash.to_be_bytes());
+
+                let file_stem = out_file
+                    .file_stem()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                let out_file = out_file
+                    .with_file_name(if pd > 1 {
+                        format!("{}-{}@{}x", file_stem, hash, pd)
+                    } else {
+                        format!("{}-{}", file_stem, hash)
+                    })
+                    .with_extension(format.ext());
+                log::debug!("Writing to {}", out_file.to_string_lossy());
+
+                if let Some(parent) = out_file.parent() {
+                    if let Err(err) = fs::create_dir_all(&parent) {
+                        log::error!(
+                            "failed to create directory {}: {}",
+                            parent.to_string_lossy(),
+                            err
+                        );
+                        process::exit(1);
+                    }
+                }
+
+                let result = match format {
+                    OutputFormat::Avif => wimg::avif::encode(&image, &(&args.avif).into()),
+                    OutputFormat::Jpeg => wimg::jpeg::encode(&image, &(&args.jpeg).into()),
+                    OutputFormat::Png => wimg::png::encode(&image),
+                    OutputFormat::Webp => wimg::webp::encode(&image, &(&args.webp).into()),
+                };
+                let image = match result {
+                    Ok(image) => image,
+                    Err(err) => {
+                        log::error!("failed to encode {} as {}: {}", path_string, format, err);
+                        process::exit(1);
+                    }
+                };
+
+                if let Err(err) = fs::write(&out_file, &image) {
+                    log::error!("failed to write {}: {}", out_file.to_string_lossy(), err);
+                    process::exit(1);
+                }
+
+                if let Some((manifest, variant)) = &mut manifest {
+                    let variants = manifest.entry(name.to_string()).or_default();
+                    let variant = variants.entry(variant.clone()).or_insert_with(|| Variant {
+                        width: image.width(),
+                        height: image.height(),
+                        pixel_density: pd,
+                        formats: Default::default(),
+                    });
+                    let pixel_densities = variant
+                        .formats
+                        .entry(format.mime_type().to_string())
+                        .or_default();
+                    pixel_densities.insert(
+                        format!("{}x", pd),
+                        out_file
+                            .strip_prefix(&args.out_dir)
+                            .unwrap()
+                            .to_string_lossy()
+                            .to_string(),
+                    );
+                }
             }
         }
     }
@@ -323,6 +360,15 @@ impl OutputFormat {
             OutputFormat::Jpeg => "jpg",
             OutputFormat::Png => "png",
             OutputFormat::Webp => "webp",
+        }
+    }
+
+    fn mime_type(&self) -> &'static str {
+        match self {
+            OutputFormat::Avif => "image/avif",
+            OutputFormat::Jpeg => "image/jpeg",
+            OutputFormat::Png => "image/png",
+            OutputFormat::Webp => "image/webp",
         }
     }
 }
