@@ -1420,6 +1420,7 @@ dependencies = [
  "hex",
  "log",
  "pretty_env_logger",
+ "serde_json",
  "wimg",
 ]
 

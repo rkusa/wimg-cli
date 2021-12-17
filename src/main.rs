@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+use std::fs::File;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Instant;
@@ -10,22 +12,38 @@ use clap::Parser;
 struct Args {
     /// Images that should be transformed
     images: Vec<PathBuf>,
+
     #[clap(long, short)]
     out_dir: PathBuf,
+
     #[clap(long, short)]
     base_dir: Option<PathBuf>,
+
     /// The width the images should be resized to.
     #[clap(long, short)]
     width: u32,
+
     /// The height the images should be resized to.
     #[clap(long, short)]
     height: u32,
+
+    /// Name of the variant.
+    #[clap(long, short = 'n')]
+    variant: Option<String>,
+
+    /// Path to the JSON manifest (requires --variant).
+    #[clap(long)]
+    manifest: Option<PathBuf>,
+
     #[clap(long, short)]
     format: Vec<OutputFormat>,
+
     #[clap(flatten)]
     jpeg: JpegOptions,
+
     #[clap(flatten)]
     webp: WebpOptions,
+
     #[clap(flatten)]
     avif: AvifOptions,
 }
@@ -62,6 +80,8 @@ enum OutputFormat {
     Webp,
 }
 
+pub type Manifest = BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>;
+
 fn main() {
     let args = Args::parse();
     pretty_env_logger::formatted_builder()
@@ -96,6 +116,42 @@ fn main() {
         None => current_dir.clone(),
     };
     log::debug!("Base dir: {}", base.to_string_lossy());
+
+    let mut manifest = args.manifest.as_ref().map(|path| {
+        let variant = match args.variant {
+            Some(variant) => variant,
+            None => {
+                log::error!(
+                    "When writing into a manifest (--manifest), the variant name (--variant) \
+                            is required",
+                );
+                process::exit(1);
+            }
+        };
+
+        if path.is_file() {
+            let data = match fs::read(&path) {
+                Ok(data) => data,
+                Err(err) => {
+                    log::error!(
+                        "failed to read manifest {} ({})",
+                        path.to_string_lossy(),
+                        err
+                    );
+                    process::exit(1);
+                }
+            };
+            match serde_json::from_slice::<Manifest>(&data) {
+                Ok(manifest) => (manifest, variant),
+                Err(err) => {
+                    log::error!("failed to parse existing manifest as JSON: {}", err);
+                    process::exit(1);
+                }
+            }
+        } else {
+            (Manifest::default(), variant)
+        }
+    });
 
     let images = args
         .images
@@ -170,7 +226,12 @@ fn main() {
             }
         };
 
-        let out_file = args.out_dir.join(path.strip_prefix(&base).unwrap());
+        let relative_path = path.strip_prefix(&base).unwrap();
+        let name = relative_path
+            .with_extension("")
+            .to_string_lossy()
+            .to_string();
+        let out_file = args.out_dir.join(relative_path);
 
         for format in &args.format {
             let seed = wimg::resize::seed()
@@ -215,6 +276,34 @@ fn main() {
                 log::error!("failed to write {}: {}", out_file.to_string_lossy(), err);
                 process::exit(1);
             }
+
+            if let Some((manifest, variant)) = &mut manifest {
+                let variants = manifest.entry(name.to_string()).or_default();
+                let formats = variants.entry(variant.clone()).or_default();
+                formats.insert(
+                    format.ext().to_string(),
+                    out_file
+                        .strip_prefix(&args.out_dir)
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    if let Some((manifest, _)) = manifest {
+        let file = match File::create(args.manifest.unwrap()) {
+            Ok(file) => file,
+            Err(err) => {
+                log::error!("failed to write manifest: {}", err);
+                process::exit(1);
+            }
+        };
+
+        if let Err(err) = serde_json::to_writer_pretty(file, &manifest) {
+            log::error!("failed to write manifest: {}", err);
+            process::exit(1);
         }
     }
 
