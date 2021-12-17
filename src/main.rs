@@ -5,7 +5,7 @@ use std::{env, error, fmt, fs, process};
 
 use clap::Parser;
 
-#[derive(Parser, Debug)]
+#[derive(Debug, Parser)]
 #[clap(about, version, author)]
 struct Args {
     /// Images that should be transformed
@@ -22,6 +22,36 @@ struct Args {
     height: u32,
     #[clap(long, short)]
     format: Vec<OutputFormat>,
+    #[clap(flatten)]
+    jpeg: JpegOptions,
+    #[clap(flatten)]
+    webp: WebpOptions,
+    #[clap(flatten)]
+    avif: AvifOptions,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct JpegOptions {
+    /// 0-100 scale
+    #[clap(name = "jpeg-quality", long, default_value = "80")]
+    pub quality: u16,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct WebpOptions {
+    /// 0-100 scale
+    #[clap(name = "webp-quality", long, default_value = "80")]
+    pub quality: u16,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct AvifOptions {
+    /// 0-100 scale
+    #[clap(name = "avif-quality", long, default_value = "60")]
+    pub quality: u16,
+    /// rav1e preset 1 (slow) 10 (fast but crappy)
+    #[clap(name = "avif-speed", long, default_value = "5")]
+    pub speed: u8,
 }
 
 #[derive(Debug)]
@@ -132,7 +162,7 @@ fn main() {
         };
 
         log::debug!("Resizing {}", path_string);
-        let image = match wimg::resize::resize(&image, args.width, args.height) {
+        let image = match wimg::resize::resize(&image, args.width, args.height, true) {
             Ok(image) => image,
             Err(err) => {
                 log::error!("failed to resize {}: {}", path_string, err);
@@ -168,10 +198,10 @@ fn main() {
             }
 
             let result = match format {
-                OutputFormat::Avif => wimg::avif::encode(&image),
-                OutputFormat::Jpeg => wimg::jpeg::encode(&image),
+                OutputFormat::Avif => wimg::avif::encode(&image, &(&args.avif).into()),
+                OutputFormat::Jpeg => wimg::jpeg::encode(&image, &(&args.jpeg).into()),
                 OutputFormat::Png => wimg::png::encode(&image),
-                OutputFormat::Webp => wimg::webp::encode(&image),
+                OutputFormat::Webp => wimg::webp::encode(&image, &(&args.webp).into()),
             };
             let image = match result {
                 Ok(image) => image,
@@ -232,3 +262,28 @@ impl fmt::Display for ParseOutputFormatError {
 }
 
 impl error::Error for ParseOutputFormatError {}
+
+impl<'a> From<&'a JpegOptions> for wimg::jpeg::EncodeOptions {
+    fn from(opts: &'a JpegOptions) -> Self {
+        Self {
+            quality: opts.quality,
+        }
+    }
+}
+
+impl<'a> From<&'a WebpOptions> for wimg::webp::EncodeOptions {
+    fn from(opts: &'a WebpOptions) -> Self {
+        Self {
+            quality: opts.quality,
+        }
+    }
+}
+
+impl<'a> From<&'a AvifOptions> for wimg::avif::EncodeOptions {
+    fn from(opts: &'a AvifOptions) -> Self {
+        Self {
+            quality: opts.quality,
+            speed: opts.speed,
+        }
+    }
+}
