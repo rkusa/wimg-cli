@@ -241,8 +241,12 @@ fn main() {
                     OutputFormat::Png => wimg::png::seed(),
                     OutputFormat::Webp => wimg::webp::seed(),
                 };
-            let hash = wimg::hash::hash(&data, seed);
+            let mut hash = wimg::hash::hash(&data, seed);
             log::debug!("Hash: {}", hex::encode(hash.to_be_bytes()));
+
+            if let Some((_, variant)) = &manifest {
+                hash += wimg::hash::hash(variant.as_bytes(), seed);
+            }
 
             let file_stem = out_file
                 .file_stem()
